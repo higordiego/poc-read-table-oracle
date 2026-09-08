@@ -1,0 +1,9 @@
+target/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+.env
+*.log
+Archive.zip
+AGENTS.md

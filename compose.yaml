@@ -1,0 +1,43 @@
+services:
+  oracle:
+    image: container-registry.oracle.com/database/free:latest
+    container_name: projection-oracle
+    environment:
+      ORACLE_PWD: ${ORACLE_ADMIN_PASSWORD:-OraclePwd123}
+      INIT_SGA_SIZE: 1536
+      INIT_PGA_SIZE: 256
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      - ./oracle/setup:/opt/oracle/scripts/setup:ro
+      # The current Free image is distributed with a prebuilt database. In
+      # that path Oracle runs startup scripts instead of first-create setup.
+      # Every script in this directory is therefore deliberately idempotent.
+      - ./oracle/setup:/opt/oracle/scripts/startup:ro
+      - ./oracle/benchmark:/opt/oracle/benchmark:ro
+    shm_size: 2gb
+    healthcheck:
+      test: ["CMD", "/opt/oracle/checkDBStatus.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 10m
+
+  app:
+    build:
+      context: .
+    environment:
+      DB_URL: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      DB_USERNAME: projection_app
+      DB_PASSWORD: ProjectionPwd123
+      PROJECTION_BOOTSTRAP_ON_STARTUP: "true"
+      PROJECTION_BOOTSTRAP_WAIT_TIMEOUT: 180s
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      oracle:
+        condition: service_healthy
+
+volumes:
+  oracle-data:

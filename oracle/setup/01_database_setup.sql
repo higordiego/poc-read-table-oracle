@@ -1,0 +1,50 @@
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+
+DECLARE
+    v_open_mode VARCHAR2(20);
+BEGIN
+    SELECT open_mode
+      INTO v_open_mode
+      FROM v$pdbs
+     WHERE name = 'FREEPDB1';
+
+    IF v_open_mode <> 'READ WRITE' THEN
+        EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE FREEPDB1 OPEN';
+    END IF;
+END;
+/
+
+ALTER SESSION SET CONTAINER = FREEPDB1;
+
+DECLARE
+    v_user_count PLS_INTEGER;
+BEGIN
+    SELECT COUNT(*)
+      INTO v_user_count
+      FROM dba_users
+     WHERE username = 'PROJECTION_APP';
+
+    IF v_user_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE USER projection_app IDENTIFIED BY ProjectionPwd123 ' ||
+            'DEFAULT TABLESPACE users QUOTA UNLIMITED ON users';
+    ELSE
+        EXECUTE IMMEDIATE
+            'ALTER USER projection_app IDENTIFIED BY ProjectionPwd123 ' ||
+            'ACCOUNT UNLOCK';
+        EXECUTE IMMEDIATE
+            'ALTER USER projection_app QUOTA UNLIMITED ON users';
+    END IF;
+END;
+/
+
+GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE,
+      CREATE PROCEDURE, CREATE TRIGGER, CREATE SYNONYM TO projection_app;
+GRANT EXECUTE ON SYS.DBMS_MEMOPTIMIZE TO projection_app;
+GRANT SELECT ON SYS.V_$PARAMETER TO projection_app;
+GRANT SELECT ON SYS.V_$SESSION TO projection_app;
+GRANT SELECT ON SYS.V_$SQL TO projection_app;
+GRANT SELECT ON SYS.V_$SQL_PLAN TO projection_app;
+GRANT SELECT ON SYS.V_$SQL_PLAN_STATISTICS_ALL TO projection_app;
+
+EXIT;

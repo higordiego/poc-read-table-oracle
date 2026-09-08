@@ -1,0 +1,552 @@
+{
+	"info": {
+		"name": "Oracle Memoptimized Read Projection PoC",
+		"description": "PoC de Trigger-Maintained Synchronous Read Projection com Idempotent Bootstrap + Memoptimized Rowstore Fast Lookup no Oracle, sobre um domínio de cálculo de tabela de preço por cliente com tarifas. Documentação completa a partir de docs/README.md no repo (executivo, arquitetura C4, implementação, testes, fluxos). Documentação interativa da API (Swagger UI) na pasta Reference abaixo ou em {{baseUrl}}/swagger-ui/index.html.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "segmentId",
+			"value": "1",
+			"type": "string"
+		},
+		{
+			"key": "customerId",
+			"value": "1000",
+			"type": "string"
+		},
+		{
+			"key": "priceTableId",
+			"value": "1",
+			"type": "string"
+		},
+		{
+			"key": "priceTableItemId",
+			"value": "1",
+			"type": "string"
+		},
+		{
+			"key": "calculationId",
+			"value": "1",
+			"type": "string"
+		},
+		{
+			"key": "searchCursor",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Readiness",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/actuator/health/readiness",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"actuator",
+								"health",
+								"readiness"
+							]
+						}
+					}
+				},
+				{
+					"name": "Liveness",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/actuator/health/liveness",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"actuator",
+								"health",
+								"liveness"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Customers",
+			"item": [
+				{
+					"name": "Create customer",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const body = pm.response.json();",
+									"    pm.collectionVariables.set('customerId', String(body.id));",
+									"    console.log('customerId set to', body.id);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"segmentId\": {{segmentId}},\n  \"name\": \"Grace Hopper\",\n  \"email\": \"grace@example.com\",\n  \"status\": \"ACTIVE\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/customers",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"customers"
+							]
+						}
+					}
+				},
+				{
+					"name": "Update customer",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"segmentId\": {{segmentId}},\n  \"name\": \"Grace Hopper\",\n  \"email\": \"grace@example.com\",\n  \"status\": \"INACTIVE\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/customers/{{customerId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"customers",
+								"{{customerId}}"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Calculations (write)",
+			"item": [
+				{
+					"name": "Create calculation",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const body = pm.response.json();",
+									"    pm.collectionVariables.set('calculationId', String(body.calculationId));",
+									"    console.log('calculationId set to', body.calculationId);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"customerId\": {{customerId}},\n  \"priceTableId\": {{priceTableId}},\n  \"items\": [\n    { \"priceTableItemId\": 1, \"quantity\": 10 },\n    { \"priceTableItemId\": 3, \"quantity\": 5 }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/calculations",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"calculations"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create calculation — with tariff rule (region)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"customerId\": {{customerId}},\n  \"priceTableId\": {{priceTableId}},\n  \"items\": [\n    { \"priceTableItemId\": 1, \"quantity\": 150, \"ruleConditionValue\": \"BR-SP\" }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/calculations",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"calculations"
+							]
+						}
+					}
+				},
+				{
+					"name": "Update calculation status",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"CONFIRMED\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/calculations/{{calculationId}}/status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"calculations",
+								"{{calculationId}}",
+								"status"
+							]
+						}
+					}
+				},
+				{
+					"name": "Delete calculation",
+					"request": {
+						"method": "DELETE",
+						"url": {
+							"raw": "{{baseUrl}}/api/calculations/{{calculationId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"calculations",
+								"{{calculationId}}"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Calculations (read)",
+			"item": [
+				{
+					"name": "Get calculation — projection (Fast Lookup path)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/read/calculations/{{calculationId}}?mode=projection",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"read",
+								"calculations",
+								"{{calculationId}}"
+							],
+							"query": [
+								{
+									"key": "mode",
+									"value": "projection"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get calculation — transactional (join baseline)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/read/calculations/{{calculationId}}?mode=transactional",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"read",
+								"calculations",
+								"{{calculationId}}"
+							],
+							"query": [
+								{
+									"key": "mode",
+									"value": "transactional"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Search calculations",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const body = pm.response.json();",
+									"    if (body.nextCursor) {",
+									"        pm.collectionVariables.set('searchCursor', body.nextCursor);",
+									"        console.log('searchCursor set to', body.nextCursor);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/read/calculations?mode=projection&customerId={{customerId}}&limit=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"read",
+								"calculations"
+							],
+							"query": [
+								{
+									"key": "mode",
+									"value": "projection"
+								},
+								{
+									"key": "customerId",
+									"value": "{{customerId}}"
+								},
+								{
+									"key": "status",
+									"value": "",
+									"disabled": true
+								},
+								{
+									"key": "email",
+									"value": "",
+									"disabled": true
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Search calculations — next page (keyset cursor)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/read/calculations?mode=projection&customerId={{customerId}}&limit=50&cursor={{searchCursor}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"read",
+								"calculations"
+							],
+							"query": [
+								{
+									"key": "mode",
+									"value": "projection"
+								},
+								{
+									"key": "customerId",
+									"value": "{{customerId}}"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								},
+								{
+									"key": "cursor",
+									"value": "{{searchCursor}}"
+								}
+							]
+						},
+						"description": "Run 'Search calculations' first — its test script captures nextCursor into {{searchCursor}}. Two queries happen server-side per call: a COUNT(*) for `total`, then a keyset-paginated SELECT for `results` (ORDER BY requested_at DESC, calculation_id DESC — no OFFSET, so it stays fast this deep into a 2.7M+ row table)."
+					}
+				}
+			]
+		},
+		{
+			"name": "Projection Admin",
+			"item": [
+				{
+					"name": "Status",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/projection/status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"projection",
+								"status"
+							]
+						}
+					}
+				},
+				{
+					"name": "Memoptimized status",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/projection/memoptimized",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"projection",
+								"memoptimized"
+							]
+						}
+					}
+				},
+				{
+					"name": "Fast Lookup execution plan",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/projection/plan/{{calculationId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"projection",
+								"plan",
+								"{{calculationId}}"
+							]
+						}
+					}
+				},
+				{
+					"name": "Validate projection",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/projection/validate",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"projection",
+								"validate"
+							]
+						}
+					}
+				},
+				{
+					"name": "Rebuild projection (blue/green cutover)",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/projection/rebuild",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"projection",
+								"rebuild"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Reference",
+			"item": [
+				{
+					"name": "OpenAPI spec (JSON)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/v3/api-docs",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v3",
+								"api-docs"
+							]
+						}
+					}
+				},
+				{
+					"name": "Swagger UI (abrir no navegador, não no Postman)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/swagger-ui/index.html",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"swagger-ui",
+								"index.html"
+							]
+						}
+					}
+				}
+			]
+		}
+	]
+}
