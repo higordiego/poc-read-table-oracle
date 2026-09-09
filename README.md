@@ -174,3 +174,8 @@ solicita nova população do pool.
 Detalhes e limites estão em [docs/architecture.md](docs/architecture.md).
 Documentação completa (executiva, implementação, testes) a partir de
 [docs/README.md](docs/README.md).
+
+## Apresentação..
+
+Slide: https://docs.google.com/presentation/d/1OMR4Hdge3b6WIKXCd-zR1qXV-hMKwf-iBAf0KR7FLbk/edit?usp=sharing
+Documento: https://docs.google.com/document/d/1wy5-Z7SnqyCf1lMzHsdyW-GNlb_bejMDNvOSDk8kFLc/edit?usp=sharing
