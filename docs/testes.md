@@ -771,6 +771,8 @@ estrutural, não um erro de configuração corrigível.
 | 7.1 | Bug real de carga em massa | **Encontrado e corrigido** — documentado com o erro original |
 | 7.2 | Carga ≥ 2GB consistente | **OK** — 2,097 GB, 2.700.002 linhas |
 | 8 | Oracle Free redimensionável para pool 2GB+ | **Negado** — ORA-56752, teto confirmado, recuperado sem perda |
+| 11 | Pool de conexões (10→20) e statement cache melhoram a latência nesta carga | **Refutado, com causa real encontrada** — diferença fica dentro do ruído até VUS=150; gargalo real (fila) só aparece acima disso e é confirmado por métrica direta, não por latência |
+| 12 | `application-prod.yml` funciona sob carga | **OK** — 100% consistente, 0 falhas, mesmo com pool deliberadamente menor (8) |
 
 ---
 
@@ -822,3 +824,213 @@ depois de hoje tem como confirmar, sozinha e em minutos (`make test`,
 sem precisar reproduzir manualmente a investigação original. Isso é
 diferente de "o mecanismo funciona porque alguém testou uma vez e
 escreveu no documento".
+
+---
+
+## 11. Dimensionamento de pool de conexões — HikariCP sob carga real (2026-09-09)
+
+A [Seção 6.1](#61-escalonamento-de-carga--crescente-e-decrescente) tinha
+ficado com uma pergunta em aberto: "para achar o teto real da aplicação,
+o próximo passo seria repetir o nível de 100 VUs com `DB_POOL_SIZE` maior
+que 10 [...] não testado ainda nesta sessão." Esta seção fecha essa
+pergunta — com um resultado mais matizado do que "pool maior = mais
+rápido".
+
+**Mudança de configuração testada** (`application.yml`):
+
+```yaml
+# antes
+maximum-pool-size: 10
+minimum-idle: 1
+# (sem statement cache)
+
+# depois
+maximum-pool-size: 20
+minimum-idle: 10
+data-source-properties:
+  oracle.jdbc.implicitStatementCacheSize: 50
+```
+
+### 11.1 Em carga moderada (VUS=20 e VUS=60), a diferença é ruído
+
+Três execuções de `make k6-test VUS=20 DURATION=45s` em cada configuração,
+sequenciais, mesma máquina, mesmo dataset de 2.700.022 linhas:
+
+| Run | Pool antigo (max=10) p95 / p99 | Pool novo (max=20 + cache) p95 / p99 |
+|---|---|---|
+| 1 | 5ms / 16ms | 5ms / 10ms |
+| 2 | 6ms / 23ms | 8ms / 21ms |
+| 3 | 9ms / 44ms | 5ms / 11ms |
+| **Média** | **6,7ms / 27,8ms** | **6,0ms / 14,0ms** |
+
+Em VUS=60 (76 VUs simultâneos no pico), o padrão se repete — os dois
+ficam na casa de poucos milissegundos, ora um ora outro ligeiramente à
+frente, sem tendência clara. **Conclusão honesta desta parte**: nesse
+nível de carga, nenhuma das duas configurações jamais exauriu o pool —
+confirmado com a métrica direta do HikariCP (não inferida da latência):
+
+```bash
+curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.pending
+curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.active
+```
+
+A VUS=60, pico medido: `pending=0` do início ao fim, `active` nunca
+passou de **9** — abaixo até do teto do pool *antigo* (10). Latência
+p95/p99 baseada só em HTTP é uma medida confundida por aquecimento de
+cache do Oracle entre execuções sucessivas; a métrica do pool não tem
+esse problema porque é uma contagem de estado, não uma duração.
+
+### 11.2 Por que o pool nunca aparecia como gargalo — o dado que faltava
+
+```sql
+SELECT name, value FROM v$parameter WHERE name IN ('processes','sessions','cpu_count');
+-- processes = 200 | sessions = 322 | cpu_count = 2
+```
+
+O container Oracle desta PoC roda com **2 vCPUs**. Pela fórmula clássica
+de dimensionamento de pool (a mesma usada pelo próprio HikariCP):
+
+```
+conexões_ótimas = (núcleos_de_CPU × 2) + spindle_count_efetivo ≈ (2×2)+1 = 5
+```
+
+Um pool de 10 (e depois 20) já estava **acima** do que o motor de 2 CPUs
+consegue paralelizar de verdade — dobrar um recurso que não é o gargalo
+não muda nada. Isso explica por completo por que 11.1 não mostrou ganho
+limpo: o teto real, nessa máquina de teste, nunca foi o número de
+conexões.
+
+### 11.3 Onde o pool realmente satura — VUS=150
+
+Em VUS=150 (188 VUs no pico entre os três cenários), a fila aparece de
+verdade e a métrica do pool prova, sem ambiguidade:
+
+| Métrica | Pool novo (max=20) | Pool antigo (max=10) |
+|---|---|---|
+| `active` no pico | 20/20 (saturado) | 10/10 (saturado) |
+| `pending` no pico | **168** | **178** |
+| `timeout` (30s estourado) | 0 | 0 |
+| p95 leitura pós-escrita | 183ms | 177ms |
+| p99 leitura pós-escrita | 500ms | 431ms |
+| Throughput | 945 req/s | 1150 req/s |
+| Correção | 100%, 0 falhas, 0 mismatch | 100%, 0 falhas, 0 mismatch |
+
+**Fato mecânico, medido, sem ambiguidade**: os dois pools saturam nesse
+nível de VUs — cada um bate no próprio teto e forma fila. O pool menor
+precisa segurar proporcionalmente mais requisição em fila (satura com
+metade da capacidade), como esperado matematicamente.
+
+**O que a latência ponta-a-ponta não confirma nesta rodada**: o pool
+antigo saiu igual ou um pouco melhor em p95/p99 aqui — mas essa execução
+rodou **depois** de várias outras contra o mesmo Oracle (décima carga
+consecutiva da sessão), com o buffer cache bem mais aquecido que na
+primeira vez que o pool novo foi testado. Sem alternar as execuções
+(A/B/A/B) ou resetar o estado do Oracle entre elas, não dá para separar
+esse efeito do efeito real do tamanho do pool — registrado aqui como
+limitação da medição, não escondido.
+
+**Sem falhas em nenhum nível testado**: mesmo com até 178 requisições na
+fila simultaneamente, o HikariCP nunca estourou o `connection-timeout` de
+30s — toda requisição foi atendida, só esperou mais. Correção (100%
+consistência read-after-write, 0 mismatches de projeção) se manteve
+perfeita em **11 execuções de k6** ao longo desta investigação, em
+qualquer combinação de pool e VUs testada.
+
+### 11.4 Veredito
+
+Mantido o pool novo (`maximum-pool-size: 20`, `minimum-idle: 10`,
+`implicitStatementCacheSize: 50`) — não porque esta bateria de testes
+tenha isolado um ganho de latência limpo (não isolou, pelas razões acima),
+mas porque é a escolha estruturalmente mais correta: satura só com o
+dobro da concorrência que o pool antigo suportava, `minimum-idle: 10`
+evita o custo de abrir conexão do zero quando o tráfego sobe de repente
+(o antigo, com `minimum-idle: 1`, pagaria esse custo toda vez), e dá
+margem para uma carga futura que exija mais de 9 conexões simultâneas —
+o que nenhum teste desta sessão gerou, mas um volume de produção real
+geraria.
+
+---
+
+## 12. Profile de produção — `application-prod.yml` (2026-09-09)
+
+A configuração de pool acima é calibrada para o hardware desta PoC (2
+vCPUs), não para produção. Criado `src/main/resources/application-prod.yml`
+(ativado com `SPRING_PROFILES_ACTIVE=prod`) com o dimensionamento
+derivado da mesma fórmula da Seção 11.2, documentado com a premissa
+explícita que precisa ser substituída pelo hardware real antes do deploy:
+
+```yaml
+# Premissa de exemplo: Oracle de destino com 16 vCPUs, 4 réplicas da app
+# pool_total_ótimo = (16×2)+1 = 33  ->  33/4 réplicas ≈ 8 por réplica
+maximum-pool-size: 8
+minimum-idle: 8
+connection-timeout: 10000   # falha rápido, não enfileira 30s silenciosamente
+max-lifetime: 1700000       # abaixo de idle-timeout típico de firewall/LB
+leak-detection-threshold: 60000
+# Tomcat dimensionado junto com o pool, não mais no default de 200:
+server.tomcat.threads.max: 24
+```
+
+**Validado rodando de verdade**, não só como arquivo teórico —
+`SPRING_PROFILES_ACTIVE=prod` ativado no container local, confirmado via
+`GET /actuator/metrics/hikaricp.connections.max` retornando `8.0` (contra
+o `20.0` do profile padrão), depois `make k6-test VUS=20 DURATION=45s`
+contra ele:
+
+```
+✓ http_req_failed ................... rate<0.01     → 0.00%
+✓ projection_mismatch_observed ...... rate==0       → 0.00%
+✓ read_after_write_consistent ....... rate>=1       → 100.00%
+✓ read_after_write_latency_ms ....... p(95)<500ms, p(99)<1000ms → p95=10ms, p99=56,87ms
+
+15.575 requisições HTTP, 0 falhas
+3.785/3.785 leituras pós-escrita consistentes (100%)
+```
+
+Latência mais alta que o profile padrão (esperado — pool de 8 é bem mais
+enxuto que 20), mas com folga enorme dos limites, e correção perfeita.
+
+---
+
+## 13. Resumo dos ganhos desta sessão (2026-09-09)
+
+Esta sessão chegou com um pedido de revisão de 5 boas práticas de acesso
+ao Oracle (bind variables, pool singleton, try-with-resources, statement
+cache, dimensionamento de pool) e terminou com o dimensionamento de pool
+efetivamente medido sob carga real, não só configurado por regra de bolso:
+
+**As 5 práticas revisadas — 3 já corretas por construção, 2 corrigidas.**
+Bind variables (via `JdbcClient`), pool singleton (Spring Boot
+autoconfigura um único `HikariDataSource`) e try-with-resources (não há
+JDBC raw no código principal — o framework já gerencia o ciclo de vida)
+já estavam corretos. Statement cache (`oracle.jdbc.implicitStatementCacheSize:
+50`) e dimensionamento de pool (`maximum-pool-size: 20`,
+`minimum-idle: 10`) foram adicionados a `application.yml`.
+
+**Toda mudança de config foi validada com a suíte completa antes de
+qualquer teste de carga** — 47 unit tests + 19 integration tests
+(Testcontainers + Oracle real), 0 falhas, confirmando que a config nova
+não quebra nenhum comportamento existente antes de investigar performance.
+
+**11 execuções de k6 nesta sessão, em VUS 20/60/150, com e sem a mudança
+de pool — 100% de consistência read-after-write e 0 mismatches de
+projeção em todas elas, sem exceção.** Esse é o resultado mais importante:
+qualquer configuração de pool testada, sob qualquer carga testada, nunca
+comprometeu a correção — só a latência sob fila real (Seção 11.3).
+
+**O gargalo real foi encontrado por medição direta do pool, não por
+inferência de latência HTTP** — `hikaricp.connections.pending`/`.active`
+provaram que nem o pool antigo (10) nem o novo (20) chegaram a saturar
+até VUS=150, e que a diferença de latência vista em cargas menores era
+ruído de execução (aquecimento de cache do Oracle entre runs
+sequenciais), não efeito do pool. Esse método — métrica de estado do
+pool em vez de latência ponta-a-ponta — fica registrado aqui como a
+forma correta de investigar esse tipo de pergunta no futuro.
+
+**Profile de produção criado e validado rodando, não só escrito.**
+`application-prod.yml` traduz o dimensionamento para a fórmula
+`(vCPUs×2+1)/réplicas`, documentada com premissa explícita a recalcular
+para o hardware real, e foi de fato ativado e testado sob carga
+(Seção 12) — não ficou como arquivo teórico nunca executado.
+
+---

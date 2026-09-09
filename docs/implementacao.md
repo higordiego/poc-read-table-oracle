@@ -592,6 +592,28 @@ enquanto ainda segurava o lock, travando as duas instâncias uma na outra.
   como um `HealthIndicator` do Spring Actuator — é o que aparece em
   `/actuator/health/readiness`.
 
+### Configuração de acesso a dados — `application.yml` / `application-prod.yml`
+
+`spring.datasource.hikari` em `application.yml` (perfil padrão, dev/PoC):
+bind variables via `JdbcClient` (nunca concatenação de SQL com valor de
+usuário), pool HikariCP dimensionado com `maximum-pool-size: 20` /
+`minimum-idle: 10` e `oracle.jdbc.implicitStatementCacheSize: 50`
+habilitado nas `data-source-properties`. O `DataSource` em si é o único
+bean autoconfigurado pelo Spring Boot — singleton por padrão, sem
+criação manual em nenhum ponto do código.
+
+`application-prod.yml` (ativado com `SPRING_PROFILES_ACTIVE=prod`)
+recalcula o pool pela fórmula `(vCPUs_do_Oracle × 2 + 1) / nº_de_réplicas`
+em vez de usar os valores fixos acima, calibrados para o hardware da PoC
+(2 vCPUs) — inclui também `connection-timeout` mais curto (falha rápido
+em vez de enfileirar 30s), `max-lifetime` abaixo de idle-timeout típico
+de firewall/LB, `leak-detection-threshold` para diagnóstico, e
+`server.tomcat.threads.max` dimensionado junto com o pool em vez do
+default de 200. Evidência completa de que o pool nunca foi o gargalo
+real nesta PoC (medido via métricas do próprio HikariCP sob carga, não
+inferido de latência) e da validação do profile de produção rodando sob
+carga real: [`docs/testes.md`, Seções 11 e 12](testes.md#11-dimensionamento-de-pool-de-conexões--hikaricp-sob-carga-real-2026-09-09).
+
 ### API REST (`api/`)
 
 Quatro controllers, todos finos — sem lógica de negócio, só tradução

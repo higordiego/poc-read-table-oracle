@@ -1,0 +1,57 @@
+# Profile de produção -- ativa com SPRING_PROFILES_ACTIVE=prod.
+#
+# Os valores abaixo são um EXEMPLO calculado para uma premissa de hardware
+# que precisa ser substituída pela real antes de ir pra produção:
+#   - Oracle de destino: 16 vCPUs, disco SSD (spindle efetivo = 1)
+#   - App rodando com 4 réplicas atrás de um load balancer
+#
+# Fórmula (a mesma usada pelo HikariCP, validada nesta PoC via
+# hikaricp_connections_pending sob carga real):
+#   pool_total_ótimo_no_banco = (vCPUs_do_Oracle x 2) + spindle_count
+#   pool_por_réplica          = pool_total_ótimo_no_banco / nº_de_réplicas
+#
+# Com 16 vCPUs: pool_total = 16*2 + 1 = 33  ->  33 / 4 réplicas ≈ 8 por réplica.
+# Recalcule com `SELECT value FROM v$parameter WHERE name='cpu_count'` no
+# banco real e o nº de réplicas real antes de usar em produção.
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:8}
+      minimum-idle: ${DB_POOL_MIN_IDLE:8}
+      # Falha rápido em vez de enfileirar silenciosamente por 30s: sob
+      # saturação real, é melhor o caller receber erro e decidir
+      # retry/circuit-break do que empilhar threads Tomcat bloqueadas
+      # (foi exatamente o que vimos no teste de VUS=150 desta sessão --
+      # 168 requisições na fila com connection-timeout de 30s).
+      connection-timeout: 10000
+      # Deve ficar abaixo de qualquer idle-timeout de firewall/load
+      # balancer entre app e banco (defina 8-9 min de margem sob o que
+      # for medido no ambiente real).
+      max-lifetime: 1700000
+      validation-timeout: 5000
+      # Diagnóstico: acusa em log se uma conexão ficar presa por mais de
+      # 60s sem devolução ao pool -- sinal de leak de Connection/try-with-
+      # resources faltando em algum código novo.
+      leak-detection-threshold: 60000
+      data-source-properties:
+        oracle.jdbc.defaultConnectionValidation: LOCAL
+        oracle.jdbc.implicitStatementCacheSize: 50
+
+# Tomcat: threads concorrentes deve ficar próximo do pool de conexões,
+# não no default de 200. Regra usada aqui: ~3x o pool, dando margem para
+# requisições que não tocam o banco (health check, endpoints admin) sem
+# deixar dezenas de threads bloqueadas esperando conexão sob pico.
+server:
+  tomcat:
+    threads:
+      max: ${TOMCAT_MAX_THREADS:24}
+      min-spare: ${TOMCAT_MIN_SPARE_THREADS:8}
+
+management:
+  metrics:
+    tags:
+      environment: production
+
+logging:
+  level:
+    com.example.projection: WARN

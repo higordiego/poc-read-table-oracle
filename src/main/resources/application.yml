@@ -7,11 +7,12 @@ spring:
     password: ${DB_PASSWORD:ProjectionPwd123}
     driver-class-name: oracle.jdbc.OracleDriver
     hikari:
-      maximum-pool-size: ${DB_POOL_SIZE:10}
-      minimum-idle: 1
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:10}
       connection-timeout: 30000
       data-source-properties:
         oracle.jdbc.defaultConnectionValidation: LOCAL
+        oracle.jdbc.implicitStatementCacheSize: 50
   flyway:
     enabled: true
     locations: classpath:db/migration

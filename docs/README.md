@@ -56,6 +56,7 @@ explica a decisão, o outro prova que ela funciona.
    - [`CalculationReadRepository`](implementacao.md#calculationreadrepository--leitura-por-pk-e-busca-filtrada)
    - [`ProjectionService`](implementacao.md#projectionservice--o-mutex-e-o-rebuild-bluegreen)
    - [Outros componentes de suporte](implementacao.md#outros-componentes-de-suporte)
+   - [Configuração de acesso a dados — `application.yml`/`application-prod.yml`](implementacao.md#configuração-de-acesso-a-dados--applicationyml--application-prodyml)
    - [API REST](implementacao.md#api-rest-api)
 3. [Carga em massa](implementacao.md#3-carga-em-massa-oraclebenchmark01_load_datasql)
 4. [Ferramentas de verificação](implementacao.md#4-ferramentas-de-verificação)
@@ -73,6 +74,9 @@ explica a decisão, o outro prova que ela funciona.
 - [8. Incidente de memória — Oracle Free, teto ~2 GB](testes.md#8-incidente-de-memória--oracle-database-free-teto-2-gb)
 - [9. Tabela-resumo de todos os testes](testes.md#9-tabela-resumo-de-todos-os-testes)
 - [10. Resumo dos ganhos desta sessão](testes.md#10-resumo-dos-ganhos-desta-sessão)
+- [11. Dimensionamento de pool de conexões — HikariCP sob carga real](testes.md#11-dimensionamento-de-pool-de-conexões--hikaricp-sob-carga-real-2026-09-09) ([carga moderada = ruído](testes.md#111-em-carga-moderada-vus20-e-vus60-a-diferença-é-ruído), [por que o pool não era o gargalo](testes.md#112-por-que-o-pool-nunca-aparecia-como-gargalo--o-dado-que-faltava), [onde satura de verdade — VUS=150](testes.md#113-onde-o-pool-realmente-satura--vus150), [veredito](testes.md#114-veredito))
+- [12. Profile de produção — `application-prod.yml`](testes.md#12-profile-de-produção--application-prodyml-2026-09-09)
+- [13. Resumo dos ganhos desta sessão (2026-09-09)](testes.md#13-resumo-dos-ganhos-desta-sessão-2026-09-09)
 
 ## Menu — Ciclo de Vida e Fluxos (`fluxos-e-ciclo-de-vida.md`)
 
